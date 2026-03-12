@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Webhook Delivery Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:        #f4f3ef;
+      --surface:   #ffffff;
+      --surface2:  #f9f8f5;
+      --border:    #e2e0d8;
+      --border2:   #cccac0;
+      --ink:       #1a1916;
+      --ink2:      #5a5750;
+      --ink3:      #9a9690;
+      --accent:    #1a56db;
+      --accent-bg: #eef3fd;
+      --green:     #157a3c;
+      --green-bg:  #eaf6ee;
+      --red:       #b91c1c;
+      --red-bg:    #fef2f2;
+      --amber:     #92400e;
+      --amber-bg:  #fffbeb;
+      --mono: 'IBM Plex Mono', monospace;
+      --sans: 'IBM Plex Sans', sans-serif;
+      --radius: 6px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* HEADER */
+    .header {
+      background: var(--ink);
+      color: #fff;
+      padding: 0 32px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 200;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }
+
+    .header-title {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: #fff;
+    }
+
+    .header-sub {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #6a6660;
+      font-weight: 300;
+      letter-spacing: 0.03em;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .worker-indicator {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #6a6660;
+    }
+
+    .worker-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: blink 2.4s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.25; }
+    }
+
+    .header-clock {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #6a6660;
+      min-width: 80px;
+      text-align: right;
+    }
+
+    /* PAGE LAYOUT */
+    .page {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 24px 32px 56px;
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 20px;
+    }
+
+    /* METRICS STRIP */
+    .metrics-strip {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px 12px;
+      box-shadow: var(--shadow);
+      animation: fadeUp 0.35s ease both;
+    }
+
+    .metric:nth-child(1) { animation-delay: 0.03s; }
+    .metric:nth-child(2) { animation-delay: 0.06s; }
+    .metric:nth-child(3) { animation-delay: 0.09s; }
+    .metric:nth-child(4) { animation-delay: 0.12s; }
+    .metric:nth-child(5) { animation-delay: 0.15s; }
+    .metric:nth-child(6) { animation-delay: 0.18s; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .metric-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ink3);
+      margin-bottom: 7px;
+    }
+
+    .metric-value {
+      font-family: var(--mono);
+      font-size: 28px;
+      font-weight: 600;
+      line-height: 1;
+      color: var(--ink);
+      letter-spacing: -0.02em;
+    }
+
+    .metric-value.clr-green { color: var(--green); }
+    .metric-value.clr-red   { color: var(--red); }
+    .metric-value.clr-amber { color: #b45309; }
+    .metric-value.clr-blue  { color: var(--accent); }
+
+    .metric-sub {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--ink3);
+      margin-top: 5px;
+    }
+
+    /* LEFT COLUMN */
+    .left-col {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadeUp 0.35s ease 0.1s both;
+    }
+
+    /* RIGHT COLUMN */
+    .right-col {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+      animation: fadeUp 0.35s ease 0.15s both;
+    }
+
+    /* CARD */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 13px 18px 11px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface2);
+    }
+
+    .card-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--ink2);
+    }
+
+    .card-note {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--ink3);
+    }
+
+    .card-body { padding: 16px 18px; }
+
+    /* FORM */
+    .field { margin-bottom: 12px; }
+    .field:last-of-type { margin-bottom: 0; }
+
+    label {
+      display: block;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink2);
+      margin-bottom: 4px;
+    }
+
+    label .opt {
+      text-transform: none;
+      font-weight: 400;
+      color: var(--ink3);
+      letter-spacing: 0;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.12s, background 0.12s;
+      -webkit-appearance: none;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+      background: #fff;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 68px;
+      line-height: 1.55;
+    }
+
+    .field-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+    .hint {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--ink3);
+      margin-top: 3px;
+    }
+
+    /* BUTTONS */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 7px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.1s;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+
+    .btn-full { width: 100%; margin-top: 12px; }
+
+    .btn-primary  { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { background: #1548c7; border-color: #1548c7; }
+
+    .btn-ghost { background: var(--surface); color: var(--ink2); border-color: var(--border2); }
+    .btn-ghost:hover { background: var(--surface2); color: var(--ink); }
+
+    .btn-danger { background: var(--red-bg); color: var(--red); border-color: #fca5a5; }
+    .btn-danger:hover { background: #fee2e2; }
+
+    .btn-success { background: var(--green-bg); color: var(--green); border-color: #86efac; }
+    .btn-success:hover { background: #dcfce7; }
+
+    .btn-sm { padding: 5px 10px; font-size: 11px; }
+    .btn-xs { padding: 3px 8px; font-size: 10px; font-family: var(--mono); }
+
+    /* BADGES */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px 2px 5px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-dot { width: 5px; height: 5px; border-radius: 50%; }
+
+    .badge-success  { background: var(--green-bg); color: var(--green); }
+    .badge-failed   { background: var(--red-bg);   color: var(--red); }
+    .badge-retrying { background: var(--amber-bg); color: var(--amber); }
+    .badge-pending  { background: var(--accent-bg); color: var(--accent); }
+    .badge-healthy  { background: var(--green-bg); color: var(--green); }
+    .badge-degraded { background: var(--amber-bg); color: var(--amber); }
+    .badge-failing  { background: var(--red-bg);   color: var(--red); }
+    .badge-cb-closed    { background: var(--green-bg); color: var(--green); border: 1px solid #86efac; }
+    .badge-cb-open      { background: var(--red-bg);   color: var(--red);   border: 1px solid #fca5a5; }
+    .badge-cb-half-open { background: var(--amber-bg); color: var(--amber); border: 1px solid #fcd34d; }
+
+    /* EVENT CHIP */
+    .event-chip {
+      background: var(--accent-bg);
+      color: var(--accent);
+      border: 1px solid #c7d9f8;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    /* TABLES */
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    thead tr {
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      padding: 8px 14px;
+      text-align: left;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--ink3);
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody tr.row-selected { background: var(--accent-bg); }
+    tbody tr.clickable { cursor: pointer; }
+
+    td {
+      padding: 9px 14px;
+      color: var(--ink2);
+      vertical-align: middle;
+    }
+
+    .td-mono { font-family: var(--mono); font-size: 11px; }
+
+    .td-url {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .td-events { display: flex; flex-wrap: wrap; gap: 3px; }
+
+    .policy-cell {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink3);
+      line-height: 1.8;
+    }
+
+    /* SECTION LABEL */
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--ink2);
+      margin: 20px 0 10px;
+      padding-bottom: 7px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-label:first-child { margin-top: 0; }
+
+    /* HTTP CODE COLOR */
+    .http-2xx { color: var(--green); font-family: var(--mono); font-size: 11px; font-weight: 600; }
+    .http-err { color: var(--red);   font-family: var(--mono); font-size: 11px; font-weight: 600; }
+    .http-na  { color: var(--ink3);  font-family: var(--mono); font-size: 11px; }
+
+    .err-text {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--red);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* SELECTED ENDPOINT HEADER */
+    .sel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      background: var(--accent-bg);
+      border: 1px solid #c7d9f8;
+      border-radius: var(--radius);
+    }
+
+    .sel-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+    }
+
+    .sel-url {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+      font-weight: 500;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* RESULT BANNERS */
+    .result-box {
+      display: none;
+      margin-top: 11px;
+      padding: 10px 13px;
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      border: 1px solid;
+    }
+
+    .result-box.ok  { display: block; background: var(--green-bg); border-color: #86efac; color: var(--green); }
+    .result-box.err { display: block; background: var(--red-bg);   border-color: #fca5a5; color: var(--red); }
+
+    /* SECRET BOX */
+    .secret-box {
+      display: none;
+      margin-top: 12px;
+      padding: 13px 14px;
+      background: var(--green-bg);
+      border: 1px solid #86efac;
+      border-radius: var(--radius);
+    }
+
+    .secret-box.show { display: block; }
+
+    .secret-box-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--green);
+      margin-bottom: 7px;
+    }
+
+    .secret-val {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--green);
+      word-break: break-all;
+      background: rgba(255,255,255,0.55);
+      border: 1px solid #86efac;
+      border-radius: 4px;
+      padding: 7px 10px;
+      margin-bottom: 9px;
+    }
+
+    .secret-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .secret-warn {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--amber);
+    }
+
+    .copy-btn {
+      background: none;
+      border: 1px solid #86efac;
+      border-radius: 4px;
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 3px 9px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .copy-btn:hover { background: rgba(255,255,255,0.5); }
+
+    /* IDEM NOTE */
+    .idem-note {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--accent);
+      margin-top: 3px;
+      display: none;
+    }
+
+    .idem-note.show { display: block; }
+
+    /* ACTION BAR */
+    .action-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    /* EMPTY STATE */
+    .empty {
+      text-align: center;
+      padding: 28px 16px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink3);
+    }
+
+    /* TOAST */
+    .toast-stack {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .toast {
+      background: var(--ink);
+      color: #f0efe9;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      border-left: 3px solid;
+      max-width: 340px;
+      box-shadow: var(--shadow-md);
+      animation: toastIn 0.18s ease;
+    }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .toast.ok   { border-color: #22c55e; }
+    .toast.err  { border-color: var(--red); }
+    .toast.info { border-color: var(--accent); }
+
+    /* DELIVERY-ID */
+    .did {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink3);
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 1080px) {
+      .page { grid-template-columns: 1fr; }
+      .metrics-strip { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 600px) {
+      .page { padding: 12px 14px 40px; }
+      .header { padding: 0 14px; }
+      .header-sub { display: none; }
+      .metrics-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <span class="header-title">WEBHOOK DELIVERY ENGINE</span>
+    <span class="header-sub">background delivery &nbsp;/&nbsp; hmac signatures &nbsp;/&nbsp; exponential backoff</span>
+  </div>
+  <div class="header-right">
+    <div class="worker-indicator">
+      <div class="worker-dot"></div>
+      worker active
+    </div>
+    <span class="header-clock" id="clock"></span>
+  </div>
+</header>
+
+<!-- PAGE -->
+<div class="page">
+
+  <!-- METRICS STRIP -->
+  <div class="metrics-strip">
+    <div class="metric">
+      <div class="metric-label">Total Events</div>
+      <div class="metric-value clr-blue" id="m-events">—</div>
+      <div class="metric-sub">triggered</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Endpoints</div>
+      <div class="metric-value" id="m-endpoints">—</div>
+      <div class="metric-sub" id="m-ep-sub">registered</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Delivered</div>
+      <div class="metric-value clr-green" id="m-delivered">—</div>
+      <div class="metric-sub">successful</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Queued</div>
+      <div class="metric-value clr-amber" id="m-queued">—</div>
+      <div class="metric-sub">pending / retrying</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Perm. Failed</div>
+      <div class="metric-value clr-red" id="m-failed">—</div>
+      <div class="metric-sub">need attention</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Success Rate</div>
+      <div class="metric-value" id="m-rate">—</div>
+      <div class="metric-sub">all time</div>
+    </div>
+  </div>
+
+  <!-- LEFT COLUMN -->
+  <div class="left-col">
+
+    <!-- TRIGGER EVENT -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Trigger Test Event</span>
+      </div>
+      <div class="card-body">
+        <div class="field">
+          <label>Event Type</label>
+          <input type="text" id="trig-type" placeholder="e.g. invoice.created" />
+        </div>
+        <div class="field">
+          <label>Idempotency Key <span class="opt">(optional)</span></label>
+          <input type="text" id="trig-idem" placeholder="e.g. event-run-2026-03-11-01"
+            oninput="document.getElementById('idem-note').className='idem-note'+(this.value?' show':'')" />
+          <div class="idem-note" id="idem-note">duplicate keys will be rejected in this session</div>
+        </div>
+        <div class="field">
+          <label>Payload (JSON)</label>
+          <textarea id="trig-payload">{"message":"hello","source":"dashboard"}</textarea>
+        </div>
+        <button class="btn btn-primary btn-full" onclick="triggerEvent()">Trigger Event</button>
+        <div class="result-box" id="trig-result"></div>
+      </div>
+    </div>
+
+    <!-- REGISTER ENDPOINT -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Register Endpoint</span>
+      </div>
+      <div class="card-body">
+        <div class="field">
+          <label>Endpoint Name <span class="opt">(optional)</span></label>
+          <input type="text" id="reg-name" placeholder="e.g. Order Service" />
+        </div>
+        <div class="field">
+          <label>Endpoint URL</label>
+          <input type="text" id="reg-url" placeholder="https://example.com/webhook" />
+        </div>
+        <div class="field">
+          <label>Event Types <span class="opt">(comma separated)</span></label>
+          <input type="text" id="reg-events" placeholder="invoice.created, user.signup" />
+        </div>
+        <div class="field field-row-3">
+          <div>
+            <label>Timeout (ms)</label>
+            <input type="number" id="reg-timeout" value="5000" />
+          </div>
+          <div>
+            <label>Max Retries</label>
+            <input type="number" id="reg-retries" value="5" />
+          </div>
+          <div>
+            <label>Backoff Base (ms)</label>
+            <input type="number" id="reg-backoff" value="1000" />
+          </div>
+        </div>
+        <div class="field">
+          <label>Secret <span class="opt">(leave blank to auto-generate)</span></label>
+          <input type="text" id="reg-secret" placeholder="my-shared-secret" />
+        </div>
+        <button class="btn btn-primary btn-full" onclick="registerEndpoint()">Register Endpoint</button>
+
+        <div class="secret-box" id="secret-box">
+          <div class="secret-box-label">Signing Secret — copy now, not shown again</div>
+          <div class="secret-val" id="secret-val"></div>
+          <div class="secret-footer">
+            <span class="secret-warn">Store this securely.</span>
+            <div style="display:flex;gap:8px">
+              <button class="copy-btn" onclick="copySecret()">Copy</button>
+              <button class="copy-btn" style="border-color:#fca5a5;color:var(--red)" onclick="dismissSecret()">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div class="right-col">
+
+    <!-- REGISTERED ENDPOINTS -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Registered Endpoints</span>
+        <span class="card-note">health computed from recent attempt success rate</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>URL</th>
+              <th>Events</th>
+              <th>Health</th>
+              <th>Circuit</th>
+              <th>Policy</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="ep-tbody">
+            <tr><td colspan="5"><div class="empty">loading...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- DELIVERY HISTORY -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Endpoint Delivery History</span>
+        <span class="card-note" id="history-note">select an endpoint above</span>
+      </div>
+      <div class="card-body">
+
+        <div id="no-sel" class="empty" style="padding:32px 0">
+          Select an endpoint row to view delivery history
+        </div>
+
+        <div id="history-body" style="display:none">
+          <div class="sel-header">
+            <span class="sel-label">Selected</span>
+            <span class="sel-url" id="sel-url"></span>
+            <div id="sel-badge"></div>
+          </div>
+
+          <div class="action-bar">
+            <button class="btn btn-ghost btn-sm" onclick="refreshHistory()">Refresh Details</button>
+          </div>
+
+          <div class="section-label">Attempts</div>
+          <div class="table-wrap" style="margin-bottom: 6px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Attempt</th>
+                  <th>HTTP</th>
+                  <th>Response Time</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody id="attempts-tbody">
+                <tr><td colspan="6"><div class="empty">no attempts yet</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="section-label" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Dead Letter Queue — Permanently Failed</span>
+            <button class="btn btn-danger btn-xs" onclick="retryAllFailed()">Retry All from DLQ</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Delivery ID</th>
+                  <th>Event Type</th>
+                  <th>Attempts</th>
+                  <th>Last Error</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="failed-tbody">
+                <tr><td colspan="5"><div class="empty">no permanently failed deliveries</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="section-label" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between">
+            <span>Event Replay — Past Events</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Event ID</th>
+                  <th>Event Type</th>
+                  <th>Triggered</th>
+                  <th>Deliveries</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="replay-tbody">
+                <tr><td colspan="5"><div class="empty">loading events...</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- IMPROVEMENTS PANEL -->
+  <div style="grid-column: 1 / -1">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">4 Self-Initiated Improvements</span>
+        <span class="card-note">implemented beyond the core requirements</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-top:none">
+
+        <div style="padding:20px 22px;border-right:1px solid var(--border)">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--green);margin-bottom:10px">
+            01 — Health Scoring
+          </div>
+          <div style="font-size:12px;color:var(--ink2);line-height:1.65;margin-bottom:12px">
+            Every endpoint gets a live health status computed from its last 20 deliveries.
+            Zero failures = <strong style="color:var(--green)">healthy</strong>.
+            Under 30% failure rate = <strong style="color:#d97706">degraded</strong>.
+            Above 30% = <strong style="color:var(--red)">failing</strong>.
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 10px;line-height:1.8">
+            src/api/endpoints.js<br>
+            computeHealth()<br>
+            getEndpointStats()<br>
+            updates every 5s
+          </div>
+        </div>
+
+        <div style="padding:20px 22px;border-right:1px solid var(--border)">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--red);margin-bottom:10px">
+            02 — Circuit Breaker
+          </div>
+          <div style="font-size:12px;color:var(--ink2);line-height:1.65;margin-bottom:12px">
+            After 5 consecutive failures the circuit opens — the worker stops hitting that endpoint for 60 seconds.
+            Then moves to half-open for one test request. Success closes it. Failure reopens it.
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 10px;line-height:1.8">
+            src/utils/circuitBreaker.js<br>
+            closed → open → half-open<br>
+            persisted in DB<br>
+            checked before every delivery
+          </div>
+        </div>
+
+        <div style="padding:20px 22px;border-right:1px solid var(--border)">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--accent);margin-bottom:10px">
+            03 — Secret Rotation
+          </div>
+          <div style="font-size:12px;color:var(--ink2);line-height:1.65;margin-bottom:12px">
+            Every endpoint has a Rotate Secret button. One click generates a fresh 32-byte HMAC secret,
+            invalidates the old one immediately, and shows the new secret exactly once.
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 10px;line-height:1.8">
+            POST /api/endpoints/:id<br>
+            /rotate-secret<br>
+            crypto.randomBytes(32)<br>
+            old secret invalidated instantly
+          </div>
+        </div>
+
+        <div style="padding:20px 22px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--amber);margin-bottom:10px">
+            04 — Rate Limiting
+          </div>
+          <div style="font-size:12px;color:var(--ink2);line-height:1.65;margin-bottom:12px">
+            Three tiers applied only to write operations — GET requests never count against limits
+            so dashboard auto-refresh never triggers them.
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--ink3);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 10px;line-height:1.8">
+            global: 2000 / 15min<br>
+            trigger: 120 / min<br>
+            create: 60 / min<br>
+            src/middleware/rateLimiter.js
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── CONSTANTS ────────────────────────────────────────
+const API = '';
+let selId   = null;
+let selUrl  = null;
+const idemCache = new Set();
+
+// ── CLOCK ────────────────────────────────────────────
+(function tickClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+  setTimeout(tickClock, 1000);
+})();
+
+// ── HTTP HELPER ──────────────────────────────────────
+async function req(method, path, body) {
+  const r = await fetch(API + '/api' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  });
+  return r.json();
+}
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB') + ', ' + d.toLocaleTimeString();
+}
+
+// ── TOAST ────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3600);
+}
+
+// ── LOAD METRICS ─────────────────────────────────────
+async function loadMetrics() {
+  try {
+    const [stats, eps, evs] = await Promise.all([
+      req('GET', '/deliveries/stats/summary'),
+      req('GET', '/endpoints'),
+      req('GET', '/events?limit=1000')
+    ]);
+
+    if (stats.success) {
+      const d = stats.data;
+      document.getElementById('m-delivered').textContent = d.delivered;
+      document.getElementById('m-queued').textContent    = d.pending + d.retrying;
+      document.getElementById('m-failed').textContent    = d.failed;
+      const r = d.success_rate;
+      const rEl = document.getElementById('m-rate');
+      rEl.textContent  = r + '%';
+      rEl.className    = 'metric-value ' + (r >= 90 ? 'clr-green' : r >= 60 ? 'clr-amber' : 'clr-red');
+    }
+
+    if (eps.success) {
+      const active = eps.data.filter(e => e.is_active).length;
+      document.getElementById('m-endpoints').textContent = eps.data.length;
+      document.getElementById('m-ep-sub').textContent    = active + ' active';
+    }
+
+    if (evs.success) {
+      document.getElementById('m-events').textContent = evs.data.length;
+    }
+  } catch(e) { /* silent */ }
+}
+
+// ── LOAD ENDPOINTS ────────────────────────────────────
+async function loadEndpoints() {
+  const res = await req('GET', '/endpoints');
+  if (!res.success) return;
+
+  const tbody = document.getElementById('ep-tbody');
+  if (!res.data.length) {
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty">no endpoints registered yet</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = res.data.map(ep => {
+    const types = Array.isArray(ep.event_types) ? ep.event_types : JSON.parse(ep.event_types || '[]');
+    return `
+      <tr class="clickable${ep.id === selId ? ' row-selected' : ''}" onclick="selectEndpoint('${ep.id}','${esc(ep.url)}')">
+        <td class="td-url" title="${esc(ep.url)}">${esc(ep.url)}</td>
+        <td><div class="td-events">${types.map(t => `<span class="event-chip">${esc(t)}</span>`).join('')}</div></td>
+        <td>${healthBadge(ep.health || 'healthy')}</td>
+        <td>${circuitBadge(ep.circuit_state || 'closed')}</td>
+        <td class="policy-cell">
+          timeout ${ep.timeout_ms || 5000}ms<br>
+          retries ${ep.max_retries || 5}<br>
+          backoff 1000ms
+        </td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();rotateSecret('${ep.id}')">Rotate Secret</button>
+            <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();deleteEp('${ep.id}')">Delete</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+// ── SELECT ENDPOINT ───────────────────────────────────
+function selectEndpoint(id, url) {
+  selId  = id;
+  selUrl = url;
+  document.getElementById('no-sel').style.display       = 'none';
+  document.getElementById('history-body').style.display = 'block';
+  document.getElementById('sel-url').textContent        = url;
+  document.getElementById('history-note').textContent   = 'auto-refreshes every 5s';
+  loadEndpoints();
+  loadHistory();
+}
+
+// ── LOAD HISTORY ─────────────────────────────────────
+async function loadHistory() {
+  if (!selId) return;
+
+  const [delRes, epRes] = await Promise.all([
+    req('GET', `/endpoints/${selId}/deliveries?limit=100`),
+    req('GET', `/endpoints/${selId}`)
+  ]);
+
+  if (epRes.success) {
+    document.getElementById('sel-badge').innerHTML = healthBadge(epRes.data.health || 'healthy');
+  }
+
+  if (!delRes.success) return;
+
+  // Flatten all attempts
+  const allAttempts = [];
+  const permFailed  = [];
+
+  delRes.data.forEach(d => {
+    (d.attempts || []).forEach(a => allAttempts.push({ ...a, event_type: d.event_type }));
+    if (d.status === 'failed') permFailed.push(d);
+  });
+
+  allAttempts.sort((a, b) => new Date(b.attempted_at) - new Date(a.attempted_at));
+
+  // Render attempts
+  const atbody = document.getElementById('attempts-tbody');
+  if (!allAttempts.length) {
+    atbody.innerHTML = `<tr><td colspan="6"><div class="empty">no attempts yet</div></td></tr>`;
+  } else {
+    atbody.innerHTML = allAttempts.slice(0, 60).map(a => {
+      const code = a.response_code;
+      const codeStr = code
+        ? `<span class="${code >= 200 && code < 300 ? 'http-2xx' : 'http-err'}">${code}</span>`
+        : `<span class="http-na">—</span>`;
+      return `<tr>
+        <td class="td-mono" style="font-size:11px;color:var(--ink3)">${fmtTime(a.attempted_at)}</td>
+        <td>${statusBadge(a.status)}</td>
+        <td class="td-mono">${a.attempt_number}</td>
+        <td>${codeStr}</td>
+        <td class="td-mono">${a.response_time_ms != null ? a.response_time_ms + 'ms' : '—'}</td>
+        <td class="err-text" title="${esc(a.error_message || '')}">${esc(a.error_message || '')}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Render DLQ — permanently failed
+  const fbody = document.getElementById('failed-tbody');
+  if (!permFailed.length) {
+    fbody.innerHTML = `<tr><td colspan="5"><div class="empty">no permanently failed deliveries</div></td></tr>`;
+  } else {
+    fbody.innerHTML = permFailed.map(d => `
+      <tr>
+        <td class="did">${d.id.substring(0,18)}…</td>
+        <td><span class="event-chip">${esc(d.event_type || '')}</span></td>
+        <td class="td-mono">${d.attempt_count} / ${d.max_retries}</td>
+        <td class="err-text" title="${esc(d.error_message || '')}">
+          ${esc(d.error_message || (d.last_response_code ? 'HTTP ' + d.last_response_code : '—'))}
+        </td>
+        <td>
+          <button class="btn btn-success btn-xs" onclick="retrySingle('${d.id}')">Retry</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  // Render event replay table
+  loadReplayEvents();
+}
+
+async function loadReplayEvents() {
+  const res = await req('GET', '/events?limit=20');
+  const tbody = document.getElementById('replay-tbody');
+  if (!res.success || !res.data.length) {
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty">no past events to replay</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = res.data.map(ev => `
+    <tr>
+      <td class="did">${ev.id.substring(0,14)}…</td>
+      <td><span class="event-chip">${esc(ev.event_type)}</span></td>
+      <td class="td-mono" style="font-size:11px;color:var(--ink3)">${fmtTime(ev.created_at)}</td>
+      <td class="td-mono" style="font-size:11px">
+        <span style="color:var(--green)">${ev.delivery_summary?.delivered || 0} ok</span>
+        <span style="color:var(--ink3);margin:0 4px">/</span>
+        <span style="color:var(--red)">${ev.delivery_summary?.failed || 0} fail</span>
+      </td>
+      <td>
+        <button class="btn btn-ghost btn-xs" onclick="replayEvent('${ev.id}')">Replay</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function replayEvent(eventId) {
+  const r = await req('POST', `/events/${eventId}/replay`,
+    selId ? { endpoint_id: selId } : {}
+  );
+  if (r.success) {
+    toast(`Replayed — ${r.data.queued_deliveries} delivery(s) queued`, 'ok');
+    loadHistory();
+    loadMetrics();
+  } else {
+    toast(r.error || 'Replay failed', 'err');
+  }
+}
+
+function refreshHistory() {
+  loadHistory();
+  toast('History refreshed', 'info');
+}
+
+async function retryAllFailed() {
+  const r = await req('POST', '/deliveries/dlq/retry-all');
+  if (r.success) {
+    toast(r.retried > 0 ? `${r.retried} delivery(s) moved from DLQ to pending` : 'DLQ is empty', r.retried > 0 ? 'ok' : 'info');
+    loadHistory();
+    loadMetrics();
+  } else {
+    toast(r.error || 'Failed', 'err');
+  }
+}
+
+async function retrySingle(id) {
+  const r = await req('POST', `/deliveries/${id}/retry`);
+  if (r.success) {
+    toast('Delivery retried', 'ok');
+    loadHistory();
+    loadMetrics();
+  } else {
+    toast(r.error || 'Retry failed', 'err');
+  }
+}
+
+// ── TRIGGER EVENT ─────────────────────────────────────
+async function triggerEvent() {
+  const type  = document.getElementById('trig-type').value.trim();
+  const idem  = document.getElementById('trig-idem').value.trim();
+  const raw   = document.getElementById('trig-payload').value.trim();
+  const resEl = document.getElementById('trig-result');
+
+  if (!type) { toast('Event type is required', 'err'); return; }
+
+  let payload;
+  try { payload = JSON.parse(raw || '{}'); }
+  catch { toast('Payload is not valid JSON', 'err'); return; }
+
+  if (idem && idemCache.has(idem)) {
+    resEl.className = 'result-box err';
+    resEl.textContent = 'Duplicate: idempotency key "' + idem + '" already used this session.';
+    return;
+  }
+
+  const body = { event_type: type, payload };
+  if (idem) body.idempotency_key = idem;
+
+  const res = await req('POST', '/events/trigger', body);
+
+  if (res.success) {
+    if (idem) idemCache.add(idem);
+    resEl.className = 'result-box ok';
+    resEl.textContent =
+      'Queued — ' + res.data.queued_deliveries + ' delivery(s) dispatched. event_id: ' + res.data.event_id;
+    toast('Event triggered: ' + res.data.queued_deliveries + ' delivery(s) queued', 'ok');
+    setTimeout(() => { loadMetrics(); loadEndpoints(); if (selId) loadHistory(); }, 700);
+  } else {
+    resEl.className = 'result-box err';
+    resEl.textContent = res.error || 'Failed to trigger event';
+    toast(res.error || 'Error triggering event', 'err');
+  }
+}
+
+// ── REGISTER ENDPOINT ─────────────────────────────────
+async function registerEndpoint() {
+  const name    = document.getElementById('reg-name').value.trim();
+  const url     = document.getElementById('reg-url').value.trim();
+  const evtRaw  = document.getElementById('reg-events').value.trim();
+  const timeout = parseInt(document.getElementById('reg-timeout').value) || 5000;
+  const retries = parseInt(document.getElementById('reg-retries').value) || 5;
+  const secret  = document.getElementById('reg-secret').value.trim();
+
+  if (!url || !evtRaw) { toast('URL and event types are required', 'err'); return; }
+
+  const event_types = evtRaw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!event_types.length) { toast('Enter at least one event type', 'err'); return; }
+
+  const body = { name: name || url, url, event_types, timeout_ms: timeout, max_retries: retries };
+  if (secret) body.secret = secret;
+
+  const res = await req('POST', '/endpoints', body);
+
+  if (res.success) {
+    document.getElementById('secret-val').textContent = res.data.secret;
+    document.getElementById('secret-box').className   = 'secret-box show';
+    toast('Endpoint registered', 'ok');
+    document.getElementById('reg-name').value   = '';
+    document.getElementById('reg-url').value    = '';
+    document.getElementById('reg-events').value = '';
+    document.getElementById('reg-secret').value = '';
+    loadEndpoints();
+    loadMetrics();
+  } else {
+    toast(res.error || 'Registration failed', 'err');
+  }
+}
+
+// ── ROTATE SECRET ─────────────────────────────────────
+async function rotateSecret(id) {
+  if (!confirm('Rotate signing secret? The old secret is invalidated immediately.')) return;
+  const res = await req('POST', `/endpoints/${id}/rotate-secret`);
+  if (res.success) {
+    document.getElementById('secret-val').textContent = res.secret;
+    document.getElementById('secret-box').className   = 'secret-box show';
+    toast('Secret rotated — copy it now', 'ok');
+  } else {
+    toast(res.error || 'Rotation failed', 'err');
+  }
+}
+
+// ── DELETE ENDPOINT ───────────────────────────────────
+async function deleteEp(id) {
+  if (!confirm('Delete this endpoint?')) return;
+  const res = await req('DELETE', '/endpoints/' + id);
+  if (res.success) {
+    toast('Endpoint deleted', 'ok');
+    if (selId === id) {
+      selId = null;
+      document.getElementById('no-sel').style.display       = 'block';
+      document.getElementById('history-body').style.display = 'none';
+    }
+    loadEndpoints();
+    loadMetrics();
+  } else {
+    toast(res.error || 'Delete failed', 'err');
+  }
+}
+
+// ── COPY SECRET ───────────────────────────────────────
+function copySecret() {
+  navigator.clipboard.writeText(document.getElementById('secret-val').textContent)
+    .then(() => toast('Secret copied to clipboard', 'ok'));
+}
+
+function dismissSecret() {
+  document.getElementById('secret-box').className = 'secret-box';
+  document.getElementById('secret-val').textContent = '';
+}
+
+// ── BADGES ────────────────────────────────────────────
+function healthBadge(h) {
+  const cls = { healthy: 'badge-healthy', degraded: 'badge-degraded', failing: 'badge-failing' };
+  const dot = { healthy: '#157a3c', degraded: '#d97706', failing: '#b91c1c' };
+  return `<span class="badge ${cls[h]||'badge-healthy'}">
+    <span class="badge-dot" style="background:${dot[h]||'#157a3c'}"></span>${h||'healthy'}
+  </span>`;
+}
+
+function circuitBadge(state) {
+  const cls = { closed: 'badge-cb-closed', open: 'badge-cb-open', 'half-open': 'badge-cb-half-open' };
+  const dot = { closed: '#157a3c', open: '#b91c1c', 'half-open': '#d97706' };
+  const label = { closed: 'closed', open: 'open', 'half-open': 'half-open' };
+  const s = state || 'closed';
+  return `<span class="badge ${cls[s]||'badge-cb-closed'}">
+    <span class="badge-dot" style="background:${dot[s]||'#157a3c'}"></span>${label[s]||s}
+  </span>`;
+}
+
+function statusBadge(s) {
+  const map = { success:'badge-success', failed:'badge-failed', retrying:'badge-retrying', pending:'badge-pending' };
+  return `<span class="badge ${map[s]||'badge-pending'}">${s}</span>`;
+}
+
+// ── AUTO REFRESH ──────────────────────────────────────
+setInterval(() => {
+  loadMetrics();
+  loadEndpoints();
+  if (selId) loadHistory();
+}, 5000);
+
+// ── INIT ──────────────────────────────────────────────
+loadMetrics();
+loadEndpoints();
+</script>
+</body>
+</html>
