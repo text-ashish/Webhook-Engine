@@ -1,75 +1,91 @@
 # Webhook Delivery Engine
 
-A production-grade webhook delivery system with reliable event delivery, exponential backoff retries, HMAC signature verification, circuit breakers, and a real-time monitoring dashboard.
+A production-grade webhook delivery system with reliable event delivery, automatic retries, exponential backoff, HMAC signature verification, circuit breakers, and a real-time monitoring dashboard.
 
 ---
 
-## Architecture Overview
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Setup & Run](#setup--run)
+- [Using the Dashboard](#using-the-dashboard)
+- [Step-by-Step Guide](#step-by-step-guide)
+- [API Reference](#api-reference)
+- [Signature Verification](#signature-verification)
+- [Retry Behavior](#retry-behavior)
+- [4 Self-Initiated Improvements](#4-self-initiated-improvements)
+- [Bonus: Scaling to 100,000+ Deliveries/min](#bonus-scaling-to-100000-deliveriesmin)
+- [Project Structure](#project-structure)
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Client / Dashboard                     │
-└────────────────────────────┬────────────────────────────────┘
-                             │ HTTP
-┌────────────────────────────▼────────────────────────────────┐
-│                    Express API Server                         │
+│                    Browser Dashboard                          │
+│         Register · Trigger · Monitor · Retry                 │
+└────────────────────────┬────────────────────────────────────┘
+                         │ HTTP
+┌────────────────────────▼────────────────────────────────────┐
+│                   Express API Server                          │
 │   /api/endpoints   /api/events   /api/deliveries             │
 │   Rate Limiting · Helmet · CORS · Morgan                     │
-└────────────┬───────────────────────────┬────────────────────┘
-             │                           │
-┌────────────▼──────────┐  ┌────────────▼────────────────────┐
-│     SQLite Database    │  │     Background Delivery Worker   │
-│  endpoints            │  │  Polls every 2s for pending/     │
-│  events               │  │  retrying deliveries             │
-│  deliveries           │  │  Processes up to 10 at a time    │
-│  delivery_attempts    │  │  Exponential backoff scheduling  │
+└────────────┬──────────────────────────┬─────────────────────┘
+             │                          │
+┌────────────▼──────────┐  ┌───────────▼─────────────────────┐
+│    SQLite Database     │  │    Background Delivery Worker    │
+│  endpoints            │  │  Polls every 2s                  │
+│  events               │  │  Processes up to 10 in parallel  │
+│  deliveries           │  │  Exponential backoff scheduling  │
+│  delivery_attempts    │  │  Circuit breaker checks          │
 │  circuit_breakers     │  └──────────────┬──────────────────┘
-└───────────────────────┘                 │
-                                          │ HTTP POST
+└───────────────────────┘                 │ HTTP POST
                           ┌───────────────▼──────────────────┐
-                          │     Subscriber Endpoints          │
-                          │  HMAC-SHA256 signed requests      │
-                          │  X-Webhook-Signature header       │
+                          │      Subscriber Endpoints         │
+                          │   HMAC-SHA256 signed requests     │
+                          │   X-Webhook-Signature header      │
                           └──────────────────────────────────┘
 ```
 
 ### How the Delivery Engine Works Internally
 
-1. **Event Trigger** — `POST /api/events/trigger` stores the event and immediately calls `queueDeliveries()`. This finds all active endpoints subscribed to the event type and inserts a `delivery` row with status `pending`. The HTTP response returns instantly with a `202 Accepted` — no waiting.
+1. **Event Trigger** — `POST /api/events/trigger` stores the event and immediately calls `queueDeliveries()`. This finds all active endpoints subscribed to the event type and inserts a `delivery` row with status `pending`. The HTTP response returns instantly with `202 Accepted` — no waiting for delivery.
 
-2. **Background Worker** — A `setInterval` loop runs every 2 seconds. It queries for deliveries where `status IN ('pending', 'retrying') AND next_retry_at <= NOW()`, then attempts up to 10 in parallel via `Promise.allSettled`.
+2. **Background Worker** — A `setInterval` loop runs every 2 seconds. It queries for deliveries where `status IN ('pending', 'retrying') AND next_retry_at <= NOW()`, then processes up to 10 in parallel via `Promise.allSettled`.
 
-3. **Attempt Execution** — For each delivery, the worker checks the circuit breaker, builds the HMAC signature, and fires an HTTP POST to the target URL with all webhook headers.
+3. **Attempt Execution** — For each delivery, the worker checks the circuit breaker state, builds the HMAC-SHA256 signature, and fires an HTTP POST to the target URL with all webhook headers.
 
-4. **Outcome Recording** — Every attempt is recorded in `delivery_attempts`. On success, the delivery is marked `delivered`. On failure, `shouldRetry()` determines whether to schedule a retry (based on status code + attempt count). Retries set `next_retry_at` using exponential backoff.
+4. **Outcome Recording** — Every attempt is logged in `delivery_attempts`. On success, the delivery is marked `delivered`. On failure, `shouldRetry()` checks the status code and attempt count. Retriable failures get a new `next_retry_at` calculated using exponential backoff.
 
-5. **Permanent Failure** — After `max_retries` attempts with no success, the delivery is marked `failed`. Manual retry is possible from the dashboard or API.
+5. **Permanent Failure** — After `max_retries` exhausted attempts, the delivery is marked `failed`. It is never deleted — it stays visible in the dashboard and can be manually retried at any time.
 
 ---
 
 ## Setup & Run
 
 ### Prerequisites
+
 - Node.js 18+
 
 ### Installation
 
 ```bash
-git clone <your-repo>
-cd webhook-delivery-engine
+git clone <your-repo-url>
+cd webhook-engine
 npm install
 cp .env.example .env
 npm start
 ```
 
+Open **http://localhost:3000** to access the monitoring dashboard.
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT`   | `3000`  | HTTP server port |
+| `PORT` | `3000` | HTTP server port |
 | `NODE_ENV` | `development` | Environment |
-
-Open **http://localhost:3000** for the monitoring dashboard.
 
 ### Run Tests
 
@@ -77,9 +93,102 @@ Open **http://localhost:3000** for the monitoring dashboard.
 npm test
 ```
 
-Runs 51 integration tests covering all API routes, signature logic, backoff algorithm, and circuit breaker behavior.
+51 integration tests covering all API routes, HMAC signature logic, exponential backoff formula, and the full circuit breaker state machine.
 
 ---
+
+## Using the Dashboard
+
+Everything you need is in the browser at `http://localhost:3000`. You do not need curl or any external tool to operate this system.
+
+**Left column**
+- **Trigger Test Event** — fire an event by type and optional JSON payload. Returns 202 immediately.
+- **Register Endpoint** — subscribe a URL to one or more event types. Configure timeout, max retries, and backoff base. Leave secret blank to auto-generate.
+
+**Right column**
+- **Registered Endpoints table** — shows every endpoint with health badge, circuit breaker state, delivery policy, and action buttons (Rotate Secret, Delete).
+- **Endpoint Delivery History** — click any endpoint row to load its full attempt history below, showing status, HTTP code, response time, attempt number, timestamp, and error for every attempt ever made.
+- **Permanently Failed Deliveries** — deliveries that exhausted all retries appear here with a Retry button for manual recovery.
+
+**Top metrics strip** — six live counters updating every 5 seconds: total events, endpoints, delivered, queued, permanently failed, success rate.
+
+---
+
+## Step-by-Step Guide
+
+This guide uses the dashboard UI. Every action is also available via the REST API — see [API Reference](#api-reference).
+
+### 1. Register an Endpoint
+
+Open `http://localhost:3000` and scroll to the **Register Endpoint** card on the left.
+
+Fill in:
+- **Endpoint URL** — the server that will receive webhook deliveries
+- **Event Types** — comma-separated e.g. `order.created, order.updated`
+- **Secret** — leave blank to auto-generate a cryptographically secure 32-byte key
+
+Click **Register Endpoint**.
+
+> ⚠️ The signing secret appears **exactly once** in the green box. Copy it before dismissing — it cannot be retrieved again, only rotated.
+
+<!-- SCREENSHOT: Dashboard showing a registered endpoint in the table with HEALTHY and CLOSED badges -->
+> 📸 **Screenshot:** Dashboard with registered endpoint
+
+![alt text](<Screenshot 2026-03-12 at 1.13.13 pm.png>)
+
+### 2. Trigger an Event
+
+Scroll to the **Trigger Test Event** card at the top left.
+
+- Set **Event Type** to `order.created` (or any type your endpoints subscribe to)
+- Leave **Payload** as the default or enter your own JSON
+- Click **Trigger Event**
+
+The green result box shows `202 Accepted` with the event ID and how many deliveries were queued. This is immediate — delivery happens entirely in the background.
+
+<!-- SCREENSHOT: Green 202 result box showing event_id and queued_deliveries count -->
+> 📸 **Screenshot:** 202 Accepted response after triggering an event
+
+![alt text](<Screenshot 2026-03-13 at 4.10.48 am.png>)
+
+### 3. Observe Delivery and Retries
+
+Click any row in the **Registered Endpoints** table. The **Endpoint Delivery History** section loads below it.
+
+Each attempt row shows:
+
+| Column | What it means |
+|--------|---------------|
+| Time | Exact timestamp of the attempt |
+| Status | `success`, `failed`, or `retrying` |
+| Attempt | Which attempt number (1, 2, 3...) |
+| HTTP | Response code from the target server |
+| Response Time | How long the request took in ms |
+| Error | Error message if the attempt failed |
+
+For a failing endpoint, click **Refresh Details** every few seconds to watch retry attempts appear as the worker processes them.
+
+Delivery state flow:
+```
+pending → retrying → retrying → ... → delivered
+                                    ↘ failed  (after max_retries)
+```
+
+<!-- SCREENSHOT: Attempts table showing multiple FAILED rows with increasing attempt numbers and timestamps proving exponential backoff -->
+> 📸 **Screenshot:** Delivery history showing retries with exponential backoff
+
+![alt text](<Screenshot 2026-03-13 at 4.10.35 am.png>)
+
+### 4. Manually Retry a Permanently Failed Delivery
+
+When all retry attempts are exhausted, the delivery moves to the **Permanently Failed Deliveries** section at the bottom of the history panel.
+
+Click **Retry** on any row. The worker picks it up within 2 seconds.
+
+<!-- SCREENSHOT: Permanently Failed Deliveries table with a row showing 5/5 attempts and the Retry button -->
+> 📸 **Screenshot:** Permanently failed delivery with Retry button
+
+![alt text](<Screenshot 2026-03-13 at 4.17.20 am.png>)
 
 ## API Reference
 
@@ -102,7 +211,6 @@ Runs 51 integration tests covering all API routes, signature logic, backoff algo
 | `POST` | `/api/events/trigger` | Trigger an event (returns 202 immediately) |
 | `GET` | `/api/events` | List recent events |
 | `GET` | `/api/events/:id` | Get event with all deliveries |
-| `GET` | `/api/events/types/list` | List all known event types |
 
 ### Deliveries
 
@@ -113,147 +221,106 @@ Runs 51 integration tests covering all API routes, signature logic, backoff algo
 | `POST` | `/api/deliveries/:id/retry` | Manually retry a failed delivery |
 | `GET` | `/api/deliveries/stats/summary` | Global delivery statistics |
 
----
-
-## Signature Verification
-
-Every webhook request includes an HMAC-SHA256 signature so your server can verify the payload came from this system.
-
-**Header sent:**
-```
-X-Webhook-Signature: sha256=<hex_digest>
-X-Webhook-ID: <delivery_uuid>
-X-Webhook-Event: order.created
-X-Webhook-Timestamp: 2024-01-15T10:30:00.000Z
-X-Delivery-Attempt: 1
-```
-
-**Verification example (Node.js):**
-```javascript
-const crypto = require('crypto');
-
-function verifyWebhook(rawBody, signature, secret) {
-  const expected = 'sha256=' + crypto
-    .createHmac('sha256', secret)
-    .update(rawBody, 'utf8')
-    .digest('hex');
-  
-  return crypto.timingSafeEqual(
-    Buffer.from(expected),
-    Buffer.from(signature)
-  );
-}
-
-app.post('/webhook', (req, res) => {
-  const sig = req.headers['x-webhook-signature'];
-  if (!verifyWebhook(JSON.stringify(req.body), sig, YOUR_SECRET)) {
-    return res.status(401).json({ error: 'Invalid signature' });
-  }
-  // Process webhook...
-  res.json({ ok: true });
-});
-```
-
----
-
-## Step-by-Step Guide
-
-### 1. Register an Endpoint
+### Example — Register via curl
 
 ```bash
 curl -X POST http://localhost:3000/api/endpoints \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "My Order Service",
-    "url": "https://your-server.com/webhooks",
-    "event_types": ["order.created", "order.updated"],
+    "name": "Order Service",
+    "url": "https://your-server.com/webhook",
+    "event_types": ["order.created"],
     "max_retries": 5,
-    "timeout_ms": 10000
+    "timeout_ms": 5000
   }'
 ```
 
-**Response (201):**
+Response `201`:
 ```json
 {
   "success": true,
-  "data": {
-    "id": "abc-123",
-    "secret": "a1b2c3d4...64chars",
-    ...
-  },
+  "data": { "id": "abc-123", "secret": "a1b2c3...64chars" },
   "message": "Endpoint registered. Store your secret — it will not be shown again."
 }
 ```
 
-⚠️ **Save the `secret` immediately** — it's only shown once.
-
-### 2. Trigger an Event
+### Example — Trigger via curl
 
 ```bash
 curl -X POST http://localhost:3000/api/events/trigger \
   -H "Content-Type: application/json" \
-  -d '{
-    "event_type": "order.created",
-    "payload": {
-      "id": "ord_001",
-      "amount": 4999,
-      "currency": "USD"
-    }
-  }'
+  -d '{ "event_type": "order.created", "payload": { "id": "ord_001" } }'
 ```
 
-**Response (202 — immediate):**
+Response `202`:
 ```json
 {
   "success": true,
   "data": {
     "event_id": "evt-xyz",
-    "queued_deliveries": 1,
-    "message": "Event queued. Delivering to 1 endpoint(s) in the background."
+    "queued_deliveries": 2,
+    "message": "Event queued. Delivering to 2 endpoint(s) in the background."
   }
 }
 ```
 
-### 3. Observe Delivery + Retries
+---
 
-```bash
-# Check delivery status
-curl http://localhost:3000/api/endpoints/abc-123/deliveries
+## Signature Verification
 
-# Full delivery detail with attempt timeline
-curl http://localhost:3000/api/deliveries/<delivery_id>
+Every webhook delivery includes an HMAC-SHA256 signature so the receiving server can verify the payload came from this system and was not modified in transit.
+
+**Headers sent on every request:**
+
+```
+X-Webhook-Signature: sha256=<hex_digest>
+X-Webhook-ID:        <delivery_uuid>
+X-Webhook-Event:     order.created
+X-Webhook-Timestamp: 2024-01-15T10:30:00.000Z
+X-Delivery-Attempt:  1
 ```
 
-The delivery transitions through states:
-```
-pending → retrying → retrying → ... → delivered
-                                    ↘ failed (after max_retries)
+**Verification in Node.js:**
+
+```javascript
+const crypto = require('crypto');
+
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const signature = req.headers['x-webhook-signature'];
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', YOUR_SECRET)
+    .update(req.body)
+    .digest('hex');
+
+  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  res.json({ ok: true });
+});
 ```
 
-### 4. Manually Retry a Failed Delivery
-
-```bash
-curl -X POST http://localhost:3000/api/deliveries/<id>/retry
-```
-
-Or click the **↻** button in the dashboard.
+> `crypto.timingSafeEqual` is used intentionally — a regular string comparison leaks timing information that can be exploited to forge signatures.
 
 ---
 
 ## Retry Behavior
 
-| Attempt | Delay (approx) |
-|---------|----------------|
+| Attempt | Approximate delay |
+|---------|-------------------|
 | 1st retry | ~2 seconds |
 | 2nd retry | ~4 seconds |
 | 3rd retry | ~8 seconds |
 | 4th retry | ~16 seconds |
 | 5th retry | ~32 seconds |
 
-Formula: `min(1000 * 2^attempt + random_jitter, 300000ms)`
+**Formula:** `min(base_ms × 2^attempt + random_jitter, 300000ms)`
 
-**Retried on:** 5xx errors, 429 rate limit, network timeout, connection refused  
-**Not retried on:** 4xx client errors (except 429) — these indicate a bad request that won't succeed on retry
+Jitter (up to 1 second of random noise) prevents multiple failing endpoints from retrying simultaneously — the thundering herd problem.
+
+**Retried on:** 5xx server errors, 429 rate limit, network timeout, connection refused
+
+**Not retried on:** 4xx client errors (except 429) — a bad request will not succeed on retry
 
 ---
 
@@ -261,127 +328,138 @@ Formula: `min(1000 * 2^attempt + random_jitter, 300000ms)`
 
 ### 1. Health Scoring
 
-**Problem it solves:** Raw delivery counts tell you nothing at a glance. With 50 endpoints you cannot manually inspect logs for each one to know which are struggling. Operators need a single signal — act now, watch it, or leave it alone.
+**Problem it solves:** Raw delivery counts tell you nothing at a glance. With many registered endpoints you cannot manually inspect logs for each one to know which are struggling. Operators need one signal per row — act now, watch it, or leave it alone.
 
-**How it works:** Every time endpoints are fetched, the last 20 deliveries for each endpoint are evaluated. Zero failures = `healthy`. Under 30% failure rate = `degraded`. Above 30% = `failing`. The circuit breaker state also feeds into this — an open circuit forces `failing` regardless of the ratio. The badge updates every 5 seconds automatically in the dashboard.
+**How it works:** Every time endpoints are listed, the last 20 delivery attempts per endpoint are evaluated server-side.
 
-**Implementation:** `computeHealth()` and `getEndpointStats()` in `src/api/endpoints.js`. Surfaced on every `GET /api/endpoints` call. Color-coded badges visible in the endpoints table with no additional queries needed from the frontend.
+| Badge | Condition |
+|-------|-----------|
+| 🟢 Healthy | 0% failure rate |
+| 🟡 Degraded | Under 30% failure rate |
+| 🔴 Failing | 30%+ failure rate, or circuit is open |
+
+Updates every 5 seconds via dashboard auto-refresh.
+
+**Implementation:** `computeHealth()` in `src/api/endpoints.js`, computed on every `GET /api/endpoints` with no extra queries.
 
 ---
 
 ### 2. Circuit Breaker
 
-**Problem it solves:** Without a circuit breaker a dead endpoint gets retried indefinitely. Every attempt consumes a worker slot, a database write, and an outbound connection — all guaranteed to fail. This delays delivery to healthy endpoints and wastes system resources proportional to how broken the dead endpoint is.
+**Problem it solves:** Without a circuit breaker, a dead endpoint gets retried indefinitely. Every guaranteed-to-fail attempt burns a worker slot, a database write, and an outbound connection. One broken endpoint can monopolise the worker and delay delivery to every healthy endpoint behind it in the queue.
 
-**How it works:** Three states persisted in the `circuit_breakers` table. After 5 consecutive failures the circuit opens — the worker skips that endpoint entirely. After 60 seconds it transitions to half-open and allows exactly one test delivery. Success closes the circuit and resets the failure count. Failure reopens it for another 60 seconds.
+**How it works:**
 
 ```
-closed  --[5 failures]-->  open  --[60s timeout]-->  half-open
-  ^                                                       |
-  |----[1 success]---------------------------------------|
-  open  <--[1 failure]----------------------------------|
+closed ──[5 consecutive failures]──▶ open ──[60s]──▶ half-open
+  ▲                                                       │
+  └────────────────[1 success]───────────────────────────┘
+  open ◀──────────────────────[1 failure]────────────────┘
 ```
 
-**Implementation:** `src/utils/circuitBreaker.js` — checked by the worker before every delivery attempt. State transitions are atomic DB updates. The circuit state is visible as a dedicated badge column in the dashboard endpoints table.
+- **Closed** — normal operation
+- **Open** — worker skips this endpoint entirely for 60 seconds
+- **Half-open** — one test delivery allowed; success closes, failure reopens
+
+**Implementation:** `src/utils/circuitBreaker.js`. Checked before every delivery attempt. State visible as the Circuit column badge in the dashboard.
 
 ---
 
 ### 3. Secret Rotation
 
-**Problem it solves:** A signing secret that cannot be rotated is a security liability. If a secret is leaked in logs, exposed in a breach, or shared with a contractor who left — the only option without rotation is to delete the entire endpoint, lose all delivery history, and re-register from scratch.
+**Problem it solves:** A secret that cannot be rotated is a security liability. If it leaks — in logs, in a breach, or through a person who has since left — the only option without rotation is to delete the endpoint entirely, losing all delivery history.
 
-**How it works:** `POST /api/endpoints/:id/rotate-secret` generates a fresh 32-byte secret via `crypto.randomBytes`, overwrites the current secret in the database immediately, and returns the new secret exactly once in the response. All subsequent deliveries use the new secret. The old secret stops working instantly — there is no grace period or dual-secret window.
+**How it works:** `POST /api/endpoints/:id/rotate-secret` generates a fresh 32-byte secret via `crypto.randomBytes`, overwrites the current secret immediately, and returns the new value exactly once. The old secret stops working instantly — no grace period.
 
-**Implementation:** `src/api/endpoints.js`. The Rotate Secret button in the dashboard calls this endpoint and shows the new secret in the same reveal box used at registration time, with a dismiss button to clear it from the DOM after copying.
+**Implementation:** `src/api/endpoints.js`. The **Rotate Secret** button in the dashboard shows the new secret in the same one-time reveal box used at registration.
 
 ---
 
 ### 4. Rate Limiting
 
-**Problem it solves:** Without rate limiting a misconfigured client, a runaway script, or a bad actor can call the event trigger endpoint thousands of times per second — flooding the delivery queue, filling the database, and blocking legitimate traffic. A single blanket limit would also break the dashboard since the auto-refresh calls GET endpoints every 5 seconds.
+**Problem it solves:** Without limits, a runaway script or bad actor can flood the event trigger endpoint — filling the delivery queue, exhausting the database, and blocking legitimate traffic. A single blanket limit would also break the dashboard auto-refresh.
 
-**How it works:** Three separate tiers applied selectively to write operations only:
+**How it works:** Three independent tiers applied only to write operations:
 
 | Tier | Limit | Applied to |
 |------|-------|------------|
 | Global | 2000 req / 15 min | All API routes |
-| Event trigger | 120 req / min | POST /api/events/trigger only |
-| Endpoint creation | 60 req / min | POST /api/endpoints only |
+| Event trigger | 120 req / min | `POST /api/events/trigger` |
+| Endpoint creation | 60 req / min | `POST /api/endpoints` |
 
-GET requests for listing endpoints, fetching delivery history, and loading stats never count against any limit. The dashboard auto-refresh runs unimpeded.
+GET requests never count against any limit — the dashboard auto-refresh runs completely unimpeded.
 
-**Implementation:** `src/middleware/rateLimiter.js` using `express-rate-limit`. The creation limiter is applied as route-level middleware directly on `router.post('/', createLimiter, ...)` rather than on the entire `/api/endpoints` prefix, which was the original bug that caused the "Creation rate limit exceeded" error on the listing page.
+**Implementation:** `src/middleware/rateLimiter.js`. The creation limiter is applied to `router.post('/', createLimiter, ...)` directly, not the entire route prefix — which was the fix for a bug where every dashboard auto-refresh consumed endpoint creation quota.
 
 ---
 
-## Bonus: Scaling to 100,000+ Deliveries per Minute
+## Bonus: Scaling to 100,000+ Deliveries/min
 
 ### Current Bottlenecks
 
-1. **Single-process worker** — the setInterval worker is single-threaded. At 100k/min (~1,667/sec) it will fall behind within seconds.
-
-2. **SQLite** — serializes all writes. Under high concurrent delivery load the DB becomes the bottleneck immediately.
-
-3. **In-process queue** — if the process crashes, all in-flight deliveries that have been dequeued but not yet attempted are lost.
-
-4. **Batch size of 10** — only 10 deliveries processed per 2-second poll cycle caps throughput at roughly 300/min on a single worker.
+| Bottleneck | Why it breaks at scale |
+|------------|------------------------|
+| Single-process worker | Single-threaded. At 1,667 deliveries/sec it falls behind within seconds |
+| SQLite | Serialises all writes. Becomes the bottleneck immediately under load |
+| 2-second polling | Adds unnecessary latency on every delivery |
+| Batch size of 10 | Caps throughput at ~300/min per worker instance |
+| In-process state | Crash = in-flight deliveries lost |
 
 ### Architectural Changes
 
-**Replace SQLite with PostgreSQL** — handles high-concurrency reads and writes, supports row-level locking, and enables `SELECT FOR UPDATE SKIP LOCKED` which is the correct pattern for a multi-worker job queue without double-processing.
+**Replace SQLite with PostgreSQL** — supports high-concurrency writes and `SELECT FOR UPDATE SKIP LOCKED`, the correct pattern for a multi-worker job queue with no double-processing.
 
-**Add Redis and BullMQ for job queuing** — decouple event ingestion from delivery entirely. Triggering an event pushes a job to Redis. Multiple worker processes pull from the queue. BullMQ handles retries, delays, priority, and job persistence natively with far better throughput than polling a SQL table.
+**Replace polling with Redis + BullMQ** — triggering an event pushes a job to Redis. Multiple worker processes pull from the queue. BullMQ handles retries, delays, and persistence natively at far greater throughput than polling SQL.
 
 ```
-API Servers (stateless, horizontally scaled)
-     | push job
-     v
+API Servers (stateless, N instances)
+       │ push job
+       ▼
 Redis / BullMQ
-     | pull job
-     v
-Worker Pool (horizontally scaled, N instances)
-     | HTTP POST
-     v
+       │ pull job
+       ▼
+Worker Pool (stateless, N instances, autoscaled by queue depth)
+       │ HTTP POST
+       ▼
 Subscriber Endpoints
 ```
 
-**Horizontal worker scaling** — workers become stateless processes deployable across machines. Scale by adding containers. Kubernetes HPA can autoscale based on Redis queue depth.
+**Horizontal worker scaling** — workers are stateless, deployable across machines, autoscaled by Kubernetes HPA based on Redis queue depth.
 
-**Batched DB writes** — buffer attempt records in memory and flush every second in batches instead of one DB write per attempt. Reduces write pressure by 10-50x at high volume.
+**Batched DB writes** — buffer attempt records and flush every second in batches instead of one write per attempt. Reduces write pressure by 10–50×.
 
-**Per-endpoint concurrency limits** — prevent a single slow endpoint from holding open worker connections indefinitely. Add configurable max concurrent deliveries per endpoint in the worker.
+**Per-endpoint concurrency limits** — prevent one slow endpoint from holding open worker connections and blocking the rest.
 
-**Estimated throughput at scale:**
-10 worker instances x 500 deliveries/sec each = 300,000 deliveries/min with p99 under 1 second.
+**Estimated throughput:** 10 workers × 500 deliveries/sec = **300,000 deliveries/min** with p99 under 1 second.
 
 ---
 
 ## Project Structure
 
 ```
-webhook-delivery-engine/
+webhook-engine/
 ├── src/
-│   ├── index.js              # Express app entry point
+│   ├── index.js                 # Express app, middleware, bootstrap
 │   ├── api/
-│   │   ├── endpoints.js      # Endpoint CRUD, health scoring, secret rotation
-│   │   ├── events.js         # Event trigger and history
-│   │   └── deliveries.js     # Delivery logs, retry, stats
+│   │   ├── endpoints.js         # CRUD, health scoring, secret rotation
+│   │   ├── events.js            # Event trigger and history
+│   │   └── deliveries.js        # Delivery logs, retry, stats
 │   ├── engine/
-│   │   └── deliveryWorker.js # Background delivery engine, exponential backoff
+│   │   └── deliveryWorker.js    # Background worker, backoff scheduling
 │   ├── db/
-│   │   └── database.js       # SQLite via sql.js
+│   │   └── database.js          # SQLite via sql.js, auto-saves every 5s
 │   ├── middleware/
-│   │   └── rateLimiter.js    # Three-tier rate limiting
+│   │   └── rateLimiter.js       # Three-tier rate limiting
 │   └── utils/
-│       ├── signature.js      # HMAC-SHA256 signing and verification
-│       ├── backoff.js        # Exponential backoff calculation
-│       └── circuitBreaker.js # Circuit breaker state machine
+│       ├── signature.js         # HMAC-SHA256 sign and verify
+│       ├── backoff.js           # Exponential backoff formula
+│       └── circuitBreaker.js    # Circuit breaker state machine
 ├── dashboard/
-│   └── index.html            # Single-page monitoring dashboard
-├── receiver.js               # Test receiver with signature verification
-├── data/                     # SQLite database (auto-created)
+│   └── index.html               # Single-page monitoring UI
+├── receiver.js                  # Test receiver with signature verification
 ├── tests/
-│   └── test.js               # 51 integration tests
+│   └── test.js                  # 51 integration tests
+├── data/                        # SQLite DB (auto-created on first run)
 ├── .env.example
 └── package.json
 ```
