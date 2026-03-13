@@ -7,7 +7,7 @@
 
 const http = require('http');
 
-const BASE = 'http://localhost:3001';
+const BASE = 'http://localhost:3002';
 let passed = 0;
 let failed = 0;
 let createdEndpointId = null;
@@ -15,7 +15,7 @@ let createdEventId = null;
 let createdDeliveryId = null;
 
 // Override PORT for testing
-process.env.PORT = '3001';
+process.env.PORT = '3002';
 
 async function req(method, path, body) {
   return new Promise((resolve, reject) => {

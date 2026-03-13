@@ -4,6 +4,12 @@ A production-grade webhook delivery system with reliable event delivery, automat
 
 ---
 
+## Video Explanation
+
+Here is a Loom video explaining the working of the Webhook Delivery System and the tasks assigned in the assessment.
+
+- 🎥 [Watch the Loom Demo](https://www.loom.com/share/6fc98d59e98649bb9843c051c7c64b3e)
+
 ## Table of Contents
 
 - [Architecture](#architecture)
